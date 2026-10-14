@@ -1,0 +1,18 @@
+# Dependencies for Python 3.10.20.
+# Install the CUDA 12.4 PyTorch wheels first; see environment.md.
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+transformers==4.57.6
+tokenizers==0.22.2
+accelerate==1.7.0
+peft==0.17.1
+safetensors==0.7.0
+huggingface-hub==0.36.2
+numpy==2.2.6
+Pillow==12.2.0
+decord==0.6.0
+einops==0.8.2
+triton==3.2.0
+
+# Install flash-attn==2.7.4.post1 separately after PyTorch, without build isolation.
+# qwen-vl-utils 0.0.14 and VGGT-Omega are loaded from source; see environment.md.

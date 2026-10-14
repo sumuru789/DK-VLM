@@ -1,0 +1,9 @@
+{
+  "target_layers": [4, 9, 14, 19, 24],
+  "geo_branch_mrope": false,
+  "token_se3_slice": [0, 48],
+  "pose_gta_slice": [48, 72],
+  "token_se3_lambdas": [0.25, 4.0],
+  "metric_global_scale": 5.0,
+  "normalize_mode": "metric"
+}

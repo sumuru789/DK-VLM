@@ -1,0 +1,21 @@
+{
+  "step_range_inclusive": [2, 4],
+  "total_rows": 1599560,
+  "files": [
+    {
+      "path": "rc_vsi_sft_all_2to4.jsonl",
+      "rows": 18756,
+      "sha256": "1ed55a7db3ce4712b5ce9885b52f721c8a0d7898bf1527a6398d1ca36cb11726"
+    },
+    {
+      "path": "rc_spar_sft_all_2to4.part1.jsonl",
+      "rows": 790402,
+      "sha256": "4bf795ebb0f4d46b53b3f3f709fc0dd09c2533f38189e44944fea02925f3f2ca"
+    },
+    {
+      "path": "rc_spar_sft_all_2to4.part2.jsonl",
+      "rows": 790402,
+      "sha256": "32ae0fc933735629a8202a0a7cb413ddc9392f6655d854a029deec781d01c55a"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="89" height="20" role="img" aria-label="Project: Page">
+  <clipPath id="badge"><rect width="89" height="20" rx="3"/></clipPath>
+  <g clip-path="url(#badge)"><rect width="49" height="20" fill="#555"/><rect x="49" width="40" height="20" fill="#007ec6"/></g>
+  <g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="10" text-anchor="middle"><text x="24.5" y="14">Project</text><text x="69" y="14">Page</text></g>
+</svg>

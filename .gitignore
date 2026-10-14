@@ -1,0 +1,24 @@
+# Local runtime outputs and environments
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+*.log
+runs/
+.ipynb_checkpoints/
+third_party/
+weights/
+data/*
+!data/rc/
+
+# Large release artifacts are distributed separately from ordinary Git commits.
+ckpt/**/*.pt
+ckpt/**/*.bin
+ckpt/**/*.safetensors
+data/rc/*.jsonl
+
+# Internal recovery/training materials must not enter the public code repository.
+Train/
+inference/source/
+ckpt.zip
