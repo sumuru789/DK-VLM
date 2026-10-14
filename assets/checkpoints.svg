@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="170" height="20" role="img" aria-label="Checkpoints: Hugging Face">
+  <clipPath id="badge"><rect width="170" height="20" rx="3"/></clipPath>
+  <g clip-path="url(#badge)"><rect width="85" height="20" fill="#555"/><rect x="85" width="85" height="20" fill="#c9a227"/></g>
+  <g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="10" text-anchor="middle"><text x="42.5" y="14">Checkpoints</text><text x="127.5" y="14">Hugging Face</text></g>
+</svg>

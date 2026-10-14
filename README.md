@@ -3,8 +3,8 @@
 <p align="center">
   <img src="assets/arxiv-pending.svg" alt="arXiv — coming soon">
   <a href="https://sumuru789.github.io/DK-VLM-website/"><img src="assets/project-page.svg" alt="Project Page"></a>
-  <img src="assets/checkpoints-pending.svg" alt="Checkpoints — coming soon">
-  <img src="assets/rc-pending.svg" alt="RC annotations — coming soon">
+  <a href="https://huggingface.co/HITshan/DK-VLM-Model"><img src="assets/checkpoints.svg" alt="Checkpoints on Hugging Face"></a>
+  <a href="https://huggingface.co/datasets/HITshan/DK-VLM-RCdata"><img src="assets/rc.svg" alt="RC annotations on Hugging Face"></a>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Vision-language models still struggle to understand 3D spatial relations across 
 
 ## 📥 Models
 
-7B and 8B checkpoints will be released soon.
+Download the 7B and 8B checkpoints from [Hugging Face](https://huggingface.co/HITshan/DK-VLM-Model).
 
 The checkpoints contain LoRA adapters and geometric branch weights. Download the matching base model separately:
 
@@ -77,7 +77,7 @@ Single-step spatial QA typically supervises judgments within a given reference f
   <img src="assets/rc.png" width="360" alt="RC example with stepwise right, left, and straight targets">
 </p>
 
-See the [RC documentation](data/rc/README.md) for the annotation format and source datasets. Original images/videos are not included.
+Download the [RC annotations](https://huggingface.co/datasets/HITshan/DK-VLM-RCdata). See the [RC documentation](data/rc/README.md) for the annotation format and source datasets. Original images/videos are not included.
 
 ---
 
