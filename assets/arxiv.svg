@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="126" height="20" role="img" aria-label="arXiv: 2610.22356">
+  <clipPath id="badge"><rect width="126" height="20" rx="3"/></clipPath>
+  <g clip-path="url(#badge)"><rect width="43" height="20" fill="#555"/><rect x="43" width="83" height="20" fill="#b31b1b"/></g>
+  <g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="10" text-anchor="middle"><text x="21.5" y="14">arXiv</text><text x="84.5" y="14">2610.22356</text></g>
+</svg>

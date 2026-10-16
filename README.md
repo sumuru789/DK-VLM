@@ -1,7 +1,7 @@
 <h1 align="center">DK-VLM: Geometry as Position for Spatial Reasoning in Vision-Language Models</h1>
 
 <p align="center">
-  <img src="assets/arxiv-pending.svg" alt="arXiv — coming soon">
+  <a href="https://arxiv.org/pdf/2610.22356"><img src="assets/arxiv.svg" alt="arXiv: 2610.22356"></a>
   <a href="https://sumuru789.github.io/DK-VLM-website/"><img src="assets/project-page.svg" alt="Project Page"></a>
   <a href="https://huggingface.co/HITshan/DK-VLM-Model"><img src="assets/checkpoints.svg" alt="Checkpoints on Hugging Face"></a>
   <a href="https://huggingface.co/datasets/HITshan/DK-VLM-RCdata"><img src="assets/rc.svg" alt="RC annotations on Hugging Face"></a>
@@ -83,4 +83,14 @@ Download the [RC annotations](https://huggingface.co/datasets/HITshan/DK-VLM-RCd
 
 ## 📖 Citation
 
-<!-- BibTeX will be added when available. -->
+```bibtex
+@misc{su2026dkvlmgeometrypositionspatial,
+  title={DK-VLM: Geometry as Position for Spatial Reasoning in Vision-Language Models},
+  author={Han Su and Meng Tian and Tianyu Huang and Mingyu Gao and Lennox Wei and Dongxu Li and Jianhua Han and Hang Xu and Xiaohe Wu and Wangmeng Zuo},
+  year={2026},
+  eprint={2610.22356},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2610.22356},
+}
+```
