@@ -177,6 +177,22 @@ def parse_args() -> argparse.Namespace:
         default=32,
         help="Per-video cache of decoded frames + VGGT geometry (0 disables)",
     )
+    ap.add_argument(
+        "--no_merge_lora",
+        action="store_true",
+        help="keep the LoRA adapter unmerged",
+    )
+    ap.add_argument(
+        "--vggt_aggregator_dtype",
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help="storage dtype of the VGGT-Omega aggregator weights (it runs under bf16 autocast)",
+    )
+    ap.add_argument(
+        "--compile_geometry",
+        action="store_true",
+        help="torch.compile the VGGT-Omega transformer blocks",
+    )
     return ap.parse_args()
 
 
@@ -203,6 +219,9 @@ def main() -> int:
         geo_attention_backend=args.geo_attention_backend,
         nframes=args.nframes,
         use_geometry=True,
+        merge_lora=not args.no_merge_lora,
+        vggt_aggregator_dtype=args.vggt_aggregator_dtype,
+        compile_geometry=args.compile_geometry,
         verbose=(rank == 0),
     )
     model.max_new_tokens = int(args.max_new_tokens)
@@ -221,21 +240,27 @@ def main() -> int:
     cache_misses = 0
     started = time.perf_counter()
 
-    def cached_scene(video: Path, scene: str):
+    def cached_scene(video: Path, scene: str, prompt: str):
+        """Frames, geometry and tokenized inputs; VGGT-Omega overlaps tokenization on a miss."""
         nonlocal cache_hits, cache_misses
         key = str(video)
         if args.scene_cache_size > 0 and key in scene_cache:
             cache_hits += 1
-            return scene_cache[key]
+            sampled, geometry = scene_cache[key]
+            return sampled, geometry, model.build_inputs(sampled, prompt, sample_id=scene)
         sampled = model.resolve_frames(video)
-        geometry = model.compute_geometry(sampled, sample_id=scene)
+        future = model.compute_geometry_async(sampled, scene)
+        try:
+            inputs = model.build_inputs(sampled, prompt, sample_id=scene)
+        finally:
+            geometry = future.result()
         cache_misses += 1
         if args.scene_cache_size > 0:
             scene_cache[key] = (sampled, geometry)
             scene_cache_order.append(key)
             while len(scene_cache_order) > args.scene_cache_size:
                 scene_cache.pop(scene_cache_order.pop(0), None)
-        return sampled, geometry
+        return sampled, geometry, inputs
 
     for i, item in enumerate(shard, start=1):
         scene = str(item.get("scene_id") or item.get("scene_name") or "")
@@ -243,10 +268,9 @@ def main() -> int:
             video = video_path_for_item(item, revsi_dir)
             if not video.is_file():
                 raise FileNotFoundError(f"video not found: {video}")
-            sampled, geometry = cached_scene(video, scene)
-            output_text = model.generate(
-                model.build_inputs(sampled, revsi_prompt(item), geometry=geometry, sample_id=scene)
-            )
+            sampled, geometry, inputs = cached_scene(video, scene, revsi_prompt(item))
+            inputs = model.attach_geometry(inputs, sampled, geometry, sample_id=scene)
+            output_text = model.generate(inputs)
             metric_name, metric_value = score_sample(item, output_text)
             results.append(
                 {
@@ -306,6 +330,9 @@ def main() -> int:
                 "scene_cache_size": args.scene_cache_size,
                 "scene_cache_hits": cache_hits,
                 "scene_cache_misses": cache_misses,
+                "merge_lora": not args.no_merge_lora,
+                "vggt_aggregator_dtype": args.vggt_aggregator_dtype,
+                "compile_geometry": args.compile_geometry,
             },
         }
         (out_dir / "predictions.jsonl").write_text(

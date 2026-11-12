@@ -51,6 +51,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="disable the geometric branch while retaining DK-VLM's LoRA adapter",
     )
+    ap.add_argument(
+        "--no_merge_lora",
+        action="store_true",
+        help="keep the LoRA adapter unmerged",
+    )
+    ap.add_argument(
+        "--vggt_aggregator_dtype",
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help="storage dtype of the VGGT-Omega aggregator weights (it runs under bf16 autocast)",
+    )
     return ap.parse_args()
 
 
@@ -66,6 +77,8 @@ def main() -> int:
         geo_attention_backend=args.geo_attention_backend,
         nframes=args.nframes,
         use_geometry=use_geometry,
+        merge_lora=not args.no_merge_lora,
+        vggt_aggregator_dtype=args.vggt_aggregator_dtype,
     )
     model.max_new_tokens = int(args.max_new_tokens)
 
@@ -78,15 +91,20 @@ def main() -> int:
 
     if use_geometry:
         t0 = time.perf_counter()
-        geometry = model.compute_geometry(sampled, sample_id="demo")
+        future = model.compute_geometry_async(sampled, sample_id="demo")
+        try:
+            inputs = model.build_inputs(sampled, prompt, sample_id="demo")
+        finally:
+            geometry = future.result()
         print(
             f"[demo] geometry: points {geometry.points.shape}, "
             f"poses {geometry.camera_poses.shape}  ({time.perf_counter() - t0:.1f}s)"
         )
+        inputs = model.attach_geometry(inputs, sampled, geometry, sample_id="demo")
     else:
         geometry = None
+        inputs = model.build_inputs(sampled, prompt, sample_id="demo")
 
-    inputs = model.build_inputs(sampled, prompt, geometry=geometry, sample_id="demo")
     if geometry is not None:
         stats = model.last_geometry_stats
         print(

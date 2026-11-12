@@ -153,6 +153,22 @@ def parse_args() -> argparse.Namespace:
         help="Per-video cache of decoded frames + VGGT geometry (0 disables)",
     )
     ap.add_argument(
+        "--no_merge_lora",
+        action="store_true",
+        help="keep the LoRA adapter unmerged",
+    )
+    ap.add_argument(
+        "--vggt_aggregator_dtype",
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help="storage dtype of the VGGT-Omega aggregator weights (it runs under bf16 autocast)",
+    )
+    ap.add_argument(
+        "--compile_geometry",
+        action="store_true",
+        help="torch.compile the VGGT-Omega transformer blocks",
+    )
+    ap.add_argument(
         "--no_geometry",
         action="store_true",
         help="disable the geometric branch while retaining DK-VLM's LoRA adapter",
@@ -192,6 +208,9 @@ def main() -> int:
         geo_attention_backend=args.geo_attention_backend,
         nframes=args.nframes,
         use_geometry=use_geometry,
+        merge_lora=not args.no_merge_lora,
+        vggt_aggregator_dtype=args.vggt_aggregator_dtype,
+        compile_geometry=args.compile_geometry,
         verbose=(rank == 0),
     )
     model.max_new_tokens = int(args.max_new_tokens)
@@ -205,14 +224,24 @@ def main() -> int:
     cache_hits = 0
     cache_misses = 0
 
-    def _cached_scene(video: Path, sample_id: str):
+    def _cached_scene(video: Path, sample_id: str, prompt: str):
+        """Frames, geometry and tokenized inputs; VGGT-Omega overlaps tokenization on a miss."""
         nonlocal cache_hits, cache_misses
         key = str(video)
         if args.scene_cache_size > 0 and key in scene_cache:
             cache_hits += 1
-            return scene_cache[key]
+            sampled, geometry = scene_cache[key]
+            return sampled, geometry, model.build_inputs(sampled, prompt, sample_id=sample_id)
         sampled = model.resolve_frames(video)
-        geometry = model.compute_geometry(sampled, sample_id) if use_geometry else None
+        if use_geometry:
+            future = model.compute_geometry_async(sampled, sample_id)
+            try:
+                inputs = model.build_inputs(sampled, prompt, sample_id=sample_id)
+            finally:
+                geometry = future.result()
+        else:
+            geometry = None
+            inputs = model.build_inputs(sampled, prompt, sample_id=sample_id)
         cache_misses += 1
         if args.scene_cache_size > 0:
             scene_cache[key] = (sampled, geometry)
@@ -220,7 +249,7 @@ def main() -> int:
             while len(scene_cache_order) > args.scene_cache_size:
                 old = scene_cache_order.pop(0)
                 scene_cache.pop(old, None)
-        return sampled, geometry
+        return sampled, geometry, inputs
 
     for i, item in enumerate(shard, start=1):
         try:
@@ -228,11 +257,10 @@ def main() -> int:
             if not video.is_file():
                 raise FileNotFoundError(f"video not found: {video}")
             sample_id = f"{item.get('dataset', '')}/{item.get('scene_name', '')}"
-            sampled, geometry = _cached_scene(video, sample_id)
             prompt = build_prompt(item.get("question", ""), item.get("options"))
-            inputs = model.build_inputs(
-                sampled, prompt, geometry=geometry, sample_id=sample_id
-            )
+            sampled, geometry, inputs = _cached_scene(video, sample_id, prompt)
+            if geometry is not None:
+                inputs = model.attach_geometry(inputs, sampled, geometry, sample_id=sample_id)
             output_text = model.generate(inputs)
             metric_name, metric_value = score_sample(item, output_text)
             results.append(
@@ -301,6 +329,9 @@ def main() -> int:
                 "scene_cache_misses": cache_misses,
                 "elapsed_sec": time.perf_counter() - started,
                 "geometry": "off" if args.no_geometry else "on",
+                "merge_lora": not args.no_merge_lora,
+                "vggt_aggregator_dtype": args.vggt_aggregator_dtype,
+                "compile_geometry": args.compile_geometry,
                 "question_type": str(args.question_type or "") or None,
             },
         }

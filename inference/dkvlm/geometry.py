@@ -25,6 +25,8 @@ import os
 import sys
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -141,6 +143,73 @@ def _pad_images_to_common_size_with_meta(
     return padded_images, pad_meta
 
 
+def _preprocess_one(
+    item: Union[str, Image.Image], mode: str, image_resolution: int, patch_size: int
+) -> Tuple[torch.Tensor, Dict[str, Any]]:
+    """One frame of :func:`preprocess_images_cpu`: the tensor and its transform record."""
+    if isinstance(item, Image.Image):
+        rgb = item.convert("RGB")
+    elif isinstance(item, str):
+        with Image.open(item) as image:
+            if image.mode == "RGBA":
+                background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+                image = Image.alpha_composite(background, image)
+            rgb = image.convert("RGB")
+    else:
+        raise TypeError(f"unsupported image type: {type(item)}")
+
+    orig_w, orig_h = rgb.size
+    cropped, crop_box = _crop_to_supported_aspect_ratio_with_box(rgb)
+    crop_w, crop_h = cropped.size
+    aspect_ratio = crop_h / max(crop_w, 1)
+
+    if mode == "balanced":
+        target_h, target_w = _balanced_target_shape(
+            aspect_ratio, image_resolution, patch_size
+        )
+    else:
+        target_h, target_w = _max_size_target_shape(
+            aspect_ratio, image_resolution, patch_size
+        )
+
+    resized = cropped.resize((target_w, target_h), Image.Resampling.BICUBIC)
+    tensor = TF.ToTensor()(resized)
+    return tensor, {
+        "orig_height": int(orig_h),
+        "orig_width": int(orig_w),
+        "crop_left": int(crop_box[0]),
+        "crop_top": int(crop_box[1]),
+        "crop_right": int(crop_box[2]),
+        "crop_bottom": int(crop_box[3]),
+        "crop_height": int(crop_h),
+        "crop_width": int(crop_w),
+        "resized_height": int(target_h),
+        "resized_width": int(target_w),
+        "pad_top": 0,
+        "pad_left": 0,
+        "pad_bottom": 0,
+        "pad_right": 0,
+        "final_height": int(target_h),
+        "final_width": int(target_w),
+        "preprocess_mode": str(mode),
+        "image_resolution": int(image_resolution),
+        "vggt_patch_size": int(patch_size),
+    }
+
+
+_PREPROCESS_POOL: Optional[ThreadPoolExecutor] = None
+
+
+def _preprocess_pool() -> ThreadPoolExecutor:
+    """Frames are resized in parallel; PIL releases the GIL while resampling."""
+    global _PREPROCESS_POOL
+    if _PREPROCESS_POOL is None:
+        _PREPROCESS_POOL = ThreadPoolExecutor(
+            max_workers=min(8, os.cpu_count() or 1), thread_name_prefix="dkvlm-preprocess"
+        )
+    return _PREPROCESS_POOL
+
+
 def preprocess_images_cpu(
     images: Sequence[Union[str, Image.Image]],
     *,
@@ -163,64 +232,16 @@ def preprocess_images_cpu(
     if image_resolution % patch_size != 0:
         raise ValueError("image_resolution must be divisible by patch_size")
 
-    tensors: List[torch.Tensor] = []
-    transforms: List[Dict[str, Any]] = []
-    shapes = set()
-    to_tensor = TF.ToTensor()
-
-    for item in images:
-        if isinstance(item, Image.Image):
-            rgb = item.convert("RGB")
-        elif isinstance(item, str):
-            with Image.open(item) as image:
-                if image.mode == "RGBA":
-                    background = Image.new("RGBA", image.size, (255, 255, 255, 255))
-                    image = Image.alpha_composite(background, image)
-                rgb = image.convert("RGB")
-        else:
-            raise TypeError(f"unsupported image type: {type(item)}")
-
-        orig_w, orig_h = rgb.size
-        cropped, crop_box = _crop_to_supported_aspect_ratio_with_box(rgb)
-        crop_w, crop_h = cropped.size
-        aspect_ratio = crop_h / max(crop_w, 1)
-
-        if mode == "balanced":
-            target_h, target_w = _balanced_target_shape(
-                aspect_ratio, image_resolution, patch_size
-            )
-        else:
-            target_h, target_w = _max_size_target_shape(
-                aspect_ratio, image_resolution, patch_size
-            )
-
-        resized = cropped.resize((target_w, target_h), Image.Resampling.BICUBIC)
-        tensor = to_tensor(resized)
-        shapes.add((tensor.shape[1], tensor.shape[2]))
-        tensors.append(tensor)
-        transforms.append(
-            {
-                "orig_height": int(orig_h),
-                "orig_width": int(orig_w),
-                "crop_left": int(crop_box[0]),
-                "crop_top": int(crop_box[1]),
-                "crop_right": int(crop_box[2]),
-                "crop_bottom": int(crop_box[3]),
-                "crop_height": int(crop_h),
-                "crop_width": int(crop_w),
-                "resized_height": int(target_h),
-                "resized_width": int(target_w),
-                "pad_top": 0,
-                "pad_left": 0,
-                "pad_bottom": 0,
-                "pad_right": 0,
-                "final_height": int(target_h),
-                "final_width": int(target_w),
-                "preprocess_mode": str(mode),
-                "image_resolution": int(image_resolution),
-                "vggt_patch_size": int(patch_size),
-            }
-        )
+    worker = partial(
+        _preprocess_one, mode=mode, image_resolution=image_resolution, patch_size=patch_size
+    )
+    if len(images) > 1:
+        done = list(_preprocess_pool().map(worker, images))
+    else:
+        done = [worker(images[0])]
+    tensors: List[torch.Tensor] = [t for t, _ in done]
+    transforms: List[Dict[str, Any]] = [tfm for _, tfm in done]
+    shapes = {(t.shape[1], t.shape[2]) for t in tensors}
 
     if len(shapes) > 1:
         warnings.warn(
@@ -360,6 +381,11 @@ class VGGTOmegaConfig:
     preprocess_mode: str = "balanced"
     conf_percentile: float = DEFAULT_CONF_PERCENTILE
     gpu_postprocess: bool = True
+    # The aggregator already runs under bf16 autocast; storing its weights in bf16 saves
+    # ~2 GiB. "float32" keeps them in fp32. The heads always stay fp32.
+    aggregator_dtype: str = "bfloat16"
+    # torch.compile the transformer blocks (one compilation per frame count).
+    compile: bool = False
 
     def resolved_ckpt(self) -> Path:
         raw = str(self.ckpt or os.environ.get("VGGT_OMEGA_CKPT", "")).strip()
@@ -429,6 +455,18 @@ class VGGTOmegaEngine:
             model.load_state_dict(torch.load(str(ckpt), map_location="cpu"))
             for p in model.parameters():
                 p.requires_grad_(False)
+            if self.cfg.aggregator_dtype not in ("bfloat16", "float32"):
+                raise ValueError(f"aggregator_dtype must be bfloat16 or float32, got {self.cfg.aggregator_dtype!r}")
+            model.aggregator.to(getattr(torch, self.cfg.aggregator_dtype))
+            if self.cfg.compile:
+                import torch._dynamo as dynamo
+
+                # All blocks share one code object and every (frame count, aspect) is a new
+                # shape, so the default limit of 8 graphs is reached quickly.
+                dynamo.config.cache_size_limit = max(dynamo.config.cache_size_limit, 64)
+                agg = model.aggregator
+                for block in (*agg.patch_embed.blocks, *agg.frame_blocks, *agg.inter_frame_blocks):
+                    block.compile(dynamic=False)
             self._model = model
             self._variant = var_name
             self._ckpt_path = ckpt

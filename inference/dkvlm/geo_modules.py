@@ -110,20 +110,25 @@ def world_to_camera_from_pose_feats(feats: torch.Tensor) -> torch.Tensor:
     return invert_se3(camera_to_world_from_pose_feats(feats))
 
 
+def _frame_ids_and_first_index(pose_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Frame id of each token (numbered by first appearance) and each frame's first token."""
+    n = pose_feats.shape[0]
+    keys = pose_feats[:, 9] if pose_feats.shape[-1] >= 10 else pose_feats[:, :9].sum(dim=-1)
+    _, inverse = torch.unique(keys, return_inverse=True)
+    n_frames = int(inverse.max().item()) + 1
+    pos = torch.arange(n, device=keys.device)
+    first = pos.new_full((n_frames,), n).scatter_reduce_(0, inverse, pos, reduce="amin")
+    order = first.argsort()
+    rank = torch.empty_like(order)
+    rank[order] = torch.arange(n_frames, device=keys.device)
+    return rank[inverse], first[order]
+
+
 def token_frame_ids(pose_feats: torch.Tensor) -> torch.Tensor:
     """Group tokens into contiguous frame ids using the ``frame_frac`` channel."""
-    n = pose_feats.shape[0]
-    if n == 0:
+    if pose_feats.shape[0] == 0:
         return torch.zeros(0, dtype=torch.long, device=pose_feats.device)
-    keys = pose_feats[:, 9] if pose_feats.shape[-1] >= 10 else pose_feats[:, :9].sum(dim=-1)
-    id_map: dict = {}
-    out = torch.empty(n, dtype=torch.long, device=pose_feats.device)
-    for i in range(n):
-        k = float(keys[i].item())
-        if k not in id_map:
-            id_map[k] = len(id_map)
-        out[i] = id_map[k]
-    return out
+    return _frame_ids_and_first_index(pose_feats)[0]
 
 
 def unique_frame_pose_and_ids(
@@ -132,16 +137,12 @@ def unique_frame_pose_and_ids(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Return per-frame world-to-camera matrices and each selected token's frame id."""
     sel = pose_feats[token_index]
-    frame_ids = token_frame_ids(sel)
-    t_max = int(frame_ids.max().item()) + 1 if frame_ids.numel() else 0
-    uniq_feats = []
-    for t in range(t_max):
-        idx = (frame_ids == t).nonzero(as_tuple=False)[0, 0]
-        uniq_feats.append(sel[idx])
-        same = sel[frame_ids == t]
-        if not torch.allclose(same[:, :9], same[:1, :9], atol=1e-4, rtol=1e-3):
-            raise ValueError(f"inconsistent pose within frame_id={t}")
-    P = world_to_camera_from_pose_feats(torch.stack(uniq_feats, 0).to(dtype=torch.float32))
+    frame_ids, first = _frame_ids_and_first_index(sel)
+    rep = sel[first]
+    same = torch.isclose(sel[:, :9], rep[frame_ids, :9], atol=1e-4, rtol=1e-3).all(dim=-1)
+    if not bool(same.all()):
+        raise ValueError(f"inconsistent pose within frame_id={int(frame_ids[~same].min())}")
+    P = world_to_camera_from_pose_feats(rep.to(dtype=torch.float32))
     return P, frame_ids
 
 

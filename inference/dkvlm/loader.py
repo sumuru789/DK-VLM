@@ -16,6 +16,7 @@ VGGT-Omega weights come from its own release. Nothing here fetches them for you.
 from __future__ import annotations
 
 import json
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -88,6 +89,16 @@ def resolve_attn_implementation(preferred: str) -> str:
     if wanted == "sdpa":
         return "sdpa"
     raise ValueError(f"unknown attn_implementation={preferred!r}")
+
+_GEOMETRY_POOL: Optional[ThreadPoolExecutor] = None
+
+
+def _geometry_pool() -> ThreadPoolExecutor:
+    global _GEOMETRY_POOL
+    if _GEOMETRY_POOL is None:
+        _GEOMETRY_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dkvlm-geometry")
+    return _GEOMETRY_POOL
+
 
 PRE_PROMPT = "These are frames of a video."
 MCA_POST_PROMPT = "Answer with the option's letter from the given choices directly."
@@ -186,6 +197,20 @@ class DKVLM:
             sample_id=sample_id,
         )
 
+    def compute_geometry_async(self, sampled: SampledFrames, sample_id: str = "") -> Future:
+        """Start ``compute_geometry`` in a worker thread; returns a future of the geometry."""
+        if self.geometry_engine is None:
+            raise RuntimeError("no geometry engine configured")
+        return _geometry_pool().submit(self._compute_geometry_on_device, sampled, sample_id)
+
+    def _compute_geometry_on_device(self, sampled: SampledFrames, sample_id: str = ""):
+        """``compute_geometry`` from a worker thread, on this model's CUDA device."""
+        device = self.device
+        if device.type != "cuda":
+            return self.compute_geometry(sampled, sample_id)
+        with torch.cuda.device(device):
+            return self.compute_geometry(sampled, sample_id)
+
     def build_inputs(
         self,
         sampled: SampledFrames,
@@ -222,7 +247,28 @@ class DKVLM:
 
         if geometry is None:
             return inputs
+        return self.attach_geometry(inputs, sampled, geometry, sample_id=sample_id)
 
+    def build_inputs_with_geometry(
+        self, sampled: SampledFrames, prompt: str, *, sample_id: str = ""
+    ) -> Dict[str, Any]:
+        """``build_inputs`` with geometry computed for these frames.
+
+        VGGT-Omega runs in a worker thread while this thread tokenizes, so the two overlap.
+        The result is identical to ``build_inputs(..., geometry=compute_geometry(...))``.
+        """
+        future = self.compute_geometry_async(sampled, sample_id)
+        try:
+            inputs = self.build_inputs(sampled, prompt, sample_id=sample_id)
+        finally:
+            geometry = future.result()
+        return self.attach_geometry(inputs, sampled, geometry, sample_id=sample_id)
+
+    def attach_geometry(
+        self, inputs: Dict[str, Any], sampled: SampledFrames, geometry, *, sample_id: str = ""
+    ) -> Dict[str, Any]:
+        """Add per-token geometry features to tokenized ``inputs``."""
+        device = self.device
         cfg = self.model.base.config
         image_grid_thw = inputs.get("image_grid_thw")
         if image_grid_thw is None or int(image_grid_thw.numel()) == 0:
@@ -278,10 +324,11 @@ class DKVLM:
     ) -> str:
         """Answer a question about a video, a directory of frames, or decoded frames."""
         sampled = self.resolve_frames(source)
-        geometry = self.compute_geometry(sampled, sample_id) if use_geometry else None
-        inputs = self.build_inputs(
-            sampled, build_prompt(question, options), geometry=geometry, sample_id=sample_id
-        )
+        prompt = build_prompt(question, options)
+        if use_geometry:
+            inputs = self.build_inputs_with_geometry(sampled, prompt, sample_id=sample_id)
+        else:
+            inputs = self.build_inputs(sampled, prompt, sample_id=sample_id)
         return self.generate(inputs, **gen_kwargs)
 
     def resolve_frames(
@@ -326,9 +373,17 @@ def load_dkvlm(
     nframes: int = DEFAULT_NFRAMES,
     max_pixels: Optional[int] = DEFAULT_MAX_PIXELS,
     use_geometry: bool = True,
+    merge_lora: bool = True,
+    vggt_aggregator_dtype: str = "bfloat16",
+    compile_geometry: bool = False,
     verbose: bool = True,
 ) -> DKVLM:
-    """Assemble base model, LoRA adapter, geometry branch and geometry front-end."""
+    """Assemble base model, LoRA adapter, geometry branch and geometry front-end.
+
+    ``merge_lora`` folds the adapter into the base weights after loading;
+    ``vggt_aggregator_dtype`` and ``compile_geometry`` configure VGGT-Omega
+    (see :class:`VGGTOmegaConfig`).
+    """
     ckpt = Path(checkpoint_dir).resolve()
     if not ckpt.is_dir():
         raise FileNotFoundError(f"checkpoint directory not found: {ckpt}")
@@ -412,10 +467,21 @@ def load_dkvlm(
                 f"(e.g. {report['ignored_keys'][0]})"
             )
 
+    if merge_lora:
+        base.model.language_model = base.model.language_model.merge_and_unload()
+        if verbose:
+            print("[dkvlm] merged LoRA adapter into the base weights")
+
     engine = None
     if use_geometry:
         engine = VGGTOmegaEngine(
-            VGGTOmegaConfig(ckpt=geometry_ckpt, device=str(dev), max_frames=max(nframes, 32))
+            VGGTOmegaConfig(
+                ckpt=geometry_ckpt,
+                device=str(dev),
+                max_frames=max(nframes, 32),
+                aggregator_dtype=vggt_aggregator_dtype,
+                compile=compile_geometry,
+            )
         )
 
     return DKVLM(
